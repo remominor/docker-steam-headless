@@ -1,134 +1,227 @@
+# Select the primary NVIDIA GPU from the runtime-visible inventory. Unraid can
+# replace NVIDIA_VISIBLE_DEVICES with "void" after exposing the requested GPUs;
+# NVIDIA_PRIMARY_GPU provides an optional stable selector for multi-GPU hosts.
+source /usr/bin/common-functions.sh
 
-# Fech NVIDIA GPU device (if one exists)
-if [ "${NVIDIA_VISIBLE_DEVICES:-}" == "all" ]; then
-    export gpu_select=$(nvidia-smi --format=csv --query-gpu=uuid 2> /dev/null | sed -n 2p)
-elif [ -z "${NVIDIA_VISIBLE_DEVICES:-}" ]; then
-    export gpu_select=$(nvidia-smi --format=csv --query-gpu=uuid 2> /dev/null | sed -n 2p)
-else
-    export gpu_select=$(nvidia-smi --format=csv --id=$(echo "$NVIDIA_VISIBLE_DEVICES" | cut -d ',' -f1) --query-gpu=uuid | sed -n 2p)
-    if [ -z "$gpu_select" ]; then
-        export gpu_select=$(nvidia-smi --format=csv --query-gpu=uuid 2> /dev/null | sed -n 2p)
-    fi
+gpu_select="$(get_nvidia_gpu_id 2>/dev/null || true)"
+export gpu_select
+
+nvidia_gpu_hex_id=""
+if [[ -n "${gpu_select}" ]]; then
+    nvidia_gpu_hex_id="$(get_nvidia_gpu_property "${gpu_select}" pci.bus_id 2>/dev/null || true)"
 fi
+export nvidia_gpu_hex_id
 
-export nvidia_gpu_hex_id=$(nvidia-smi --format=csv --query-gpu=pci.bus_id --id="${gpu_select}" 2> /dev/null | sed -n 2p)
+monitor_connected="$(awk '/^connected$/ { print; exit }' /sys/class/drm/card*/status 2>/dev/null || true)"
+export monitor_connected
 
-export monitor_connected=$(cat /sys/class/drm/card*/status | awk '/^connected/ { print $1; }' | head -n1)
+# Reuse a display size selected in XFCE when the persisted configuration is
+# complete and valid. Otherwise retain the container environment defaults.
+displays_file="${USER_HOME}/.config/xfce4/xfconf/xfce-perchannel-xml/displays.xml"
+if [[ -f "${displays_file}" ]]; then
+    new_display_resolution="$(grep -m1 'Resolution' "${displays_file}" | sed -n 's/.*value="\([^"]*\)".*/\1/p')"
+    new_display_refresh="$(grep -m1 'RefreshRate' "${displays_file}" | sed -n 's/.*value="\([^"]*\)".*/\1/p')"
 
-# Fech current configuration (if modified in UI)
-if [ -f "${USER_HOME}/.config/xfce4/xfconf/xfce-perchannel-xml/displays.xml" ]; then
-    new_display_sizew=$(cat ${USER_HOME}/.config/xfce4/xfconf/xfce-perchannel-xml/displays.xml | grep Resolution | head -n1 | grep -oP '(?<=value=").*?(?=")' | cut -d'x' -f1)
-    new_display_sizeh=$(cat ${USER_HOME}/.config/xfce4/xfconf/xfce-perchannel-xml/displays.xml | grep Resolution | head -n1 | grep -oP '(?<=value=").*?(?=")' | cut -d'x' -f2)
-    new_display_refresh=$(cat ${USER_HOME}/.config/xfce4/xfconf/xfce-perchannel-xml/displays.xml | grep RefreshRate | head -n1 | grep -oP '(?<=value=").*?(?=")' | cut -d'x' -f2)
-    if [ "${new_display_sizew}x" != "x" ] && [ "${new_display_sizeh}x" != "x" ] && [ "${new_display_refresh}x" != "x" ]; then
+    if [[ "${new_display_resolution}" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+        new_display_sizew="${BASH_REMATCH[1]}"
+        new_display_sizeh="${BASH_REMATCH[2]}"
+    else
+        new_display_sizew=""
+        new_display_sizeh=""
+    fi
+
+    if [[ -n "${new_display_sizew}" &&
+            "${new_display_refresh}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
         export DISPLAY_SIZEW="${new_display_sizew}"
         export DISPLAY_SIZEH="${new_display_sizeh}"
-        # Round refresh rate to closest multiple of 60
-        export DISPLAY_REFRESH="$(echo ${new_display_refresh} | awk '{rounded = int(($1 + 30) / 60) * 60; if (rounded < 30) rounded += 60; print rounded}')"
+        # Round the persisted rate to the closest positive multiple of 60.
+        export DISPLAY_REFRESH="$(awk -v rate="${new_display_refresh}" 'BEGIN {
+            rounded = int((rate + 30) / 60) * 60
+            if (rounded < 30) rounded += 60
+            print rounded
+        }')"
+    else
+        print_warning "Ignoring incomplete or invalid XFCE display configuration in '${displays_file}'"
     fi
 fi
 
-# Configure a NVIDIA X11 config
-function configure_nvidia_x_server {
-    print_step_header "Configuring X11 with GPU ID: '${gpu_select}'"
-    nvidia_gpu_hex_id=$(nvidia-smi --format=csv --query-gpu=pci.bus_id --id="${gpu_select}" 2> /dev/null | sed -n 2p)
-    IFS=":." ARR_ID=(${nvidia_gpu_hex_id})
-    unset IFS
-    bus_id=PCI:$((16#${ARR_ID[1]})):$((16#${ARR_ID[2]})):$((16#${ARR_ID[3]}))
-    print_step_header "Configuring X11 with PCI bus ID: '${bus_id}'"
-    export MODELINE=$(cvt -r "${DISPLAY_SIZEW}" "${DISPLAY_SIZEH}" "${DISPLAY_REFRESH}" | sed -n 2p)
-    print_step_header "Writing X11 config with ${MODELINE}"
-    connected_monitor="--use-display-device=None"
-    if [[ "X${DISPLAY_VIDEO_PORT:-}" != "X" ]]; then
-        connected_monitor="--connected-monitor=${DISPLAY_VIDEO_PORT:?}"
+# Configure a deterministic NVIDIA-backed synthetic X11 display. This avoids
+# nvidia-xconfig hardware probing, which is unreliable inside a container, and
+# ensures RandR exposes an output that Steam and Sunshine can use.
+configure_nvidia_x_server() {
+    local pci_domain
+    local pci_bus
+    local pci_device
+    local pci_function
+    local bus_id
+    local display_output="${DISPLAY_VIDEO_PORT:-DP-0}"
+    local modeline
+    local mode_name
+    local mode_debug_option=""
+    local xorg_config_tmp
+
+    print_step_header "Configuring synthetic X11 display with GPU ID: '${gpu_select}'"
+
+    if [[ ! "${nvidia_gpu_hex_id}" =~ ^[[:xdigit:]]+:[[:xdigit:]]+:[[:xdigit:]]+[.][[:xdigit:]]+$ ]]; then
+        print_error "Invalid NVIDIA PCI bus ID '${nvidia_gpu_hex_id}'"
+        return 1
     fi
-    nvidia-xconfig --virtual="${DISPLAY_SIZEW:?}x${DISPLAY_SIZEH:?}" --depth="${DISPLAY_CDEPTH:?}" --mode=$(echo "${MODELINE:?}" | awk '{print $2}' | tr -d '"') --allow-empty-initial-configuration --no-probe-all-gpus --busid="${bus_id:?}" --no-multigpu --no-sli --no-base-mosaic --only-one-x-screen ${connected_monitor:?}
-    # Allow SteamHeadless to run with an eGPU
-    sed -i '/Driver\s\+"nvidia"/a\    Option         "AllowExternalGpus" "True"' /etc/X11/xorg.conf
-    # Configure primary GPU
-    sed -i '/Driver\s\+"nvidia"/a\    Option         "PrimaryGPU" "yes"' /etc/X11/xorg.conf
-    # Force X server to start even if no display devices are connected
-    sed -i '/Driver\s\+"nvidia"/a\    Option         "AllowEmptyInitialConfiguration"' /etc/X11/xorg.conf
-    # Disable some mode validation checks
-    sed -i '/Driver\s\+"nvidia"/a\    Option         "ModeValidation" "NoMaxPClkCheck, NoEdidMaxPClkCheck, NoMaxSizeCheck, NoHorizSyncCheck, NoVertRefreshCheck, NoVirtualSizeCheck, NoTotalSizeCheck, NoDualLinkDVICheck, NoDisplayPortBandwidthCheck, AllowNon3DVisionModes, AllowNonHDMI3DModes, AllowNonEdidModes, NoEdidHDMI2Check, AllowDpInterlaced"' /etc/X11/xorg.conf
-    # Configure the default modeline
-    sed -i '/Section\s\+"Monitor"/a\    '"${MODELINE}" /etc/X11/xorg.conf
-    # Prevent interference between GPUs
-    echo -e "Section \"ServerFlags\"\n    Option \"AutoAddGPU\" \"false\"\nEndSection" | tee -a /etc/X11/xorg.conf > /dev/null
+    IFS=':.' read -r pci_domain pci_bus pci_device pci_function <<<"${nvidia_gpu_hex_id}"
+    bus_id="PCI:$((16#${pci_bus})):$((16#${pci_device})):$((16#${pci_function}))"
+
+    if [[ ! "${DISPLAY_SIZEW:-}" =~ ^[0-9]+$ ||
+            ! "${DISPLAY_SIZEH:-}" =~ ^[0-9]+$ ||
+            ! "${DISPLAY_REFRESH:-}" =~ ^[0-9]+$ ||
+            ! "${DISPLAY_CDEPTH:-}" =~ ^[0-9]+$ ]]; then
+        print_error "Invalid display geometry '${DISPLAY_SIZEW:-}x${DISPLAY_SIZEH:-}@${DISPLAY_REFRESH:-}' depth '${DISPLAY_CDEPTH:-}'"
+        return 1
+    fi
+
+    # These are NVIDIA RandR output names. A concrete output is required;
+    # generic values such as DFP can leave the server in MetaMode NULL.
+    if [[ ! "${display_output}" =~ ^(DP|HDMI|DFP|DVI-D|DVI-I)-[0-9]+$ ]]; then
+        print_error "Invalid DISPLAY_VIDEO_PORT '${display_output}'. Use a concrete output such as DP-0."
+        return 1
+    fi
+
+    modeline="$(cvt -r "${DISPLAY_SIZEW}" "${DISPLAY_SIZEH}" "${DISPLAY_REFRESH}" 2>/dev/null | sed -n '2p')"
+    if [[ -z "${modeline}" ]]; then
+        print_error "Unable to generate a modeline for ${DISPLAY_SIZEW}x${DISPLAY_SIZEH}@${DISPLAY_REFRESH}"
+        return 1
+    fi
+    mode_name="$(awk '{ print $2 }' <<<"${modeline}" | tr -d '"')"
+
+    if [[ "${XORG_MODE_DEBUG:-false}" == "true" ]]; then
+        mode_debug_option='    Option "ModeDebug" "True"'
+    fi
+
+    print_step_header "Configuring X11 with PCI bus ID: '${bus_id}'"
+    print_step_header "Creating synthetic output '${display_output}' with ${modeline}"
+
+    xorg_config_tmp="$(mktemp /etc/X11/xorg.conf.XXXXXX)"
+    cat >"${xorg_config_tmp}" <<EOF
+Section "Files"
+    # The NVIDIA container runtime installs host-matched Xorg modules here.
+    # Debian's remaining Xorg modules continue to come from /usr/lib.
+    ModulePath "/usr/lib64/xorg/modules"
+    ModulePath "/usr/lib/xorg/modules"
+EndSection
+
+Section "ServerLayout"
+    Identifier "HeadlessLayout"
+    Screen 0 "HeadlessScreen" 0 0
+EndSection
+
+Section "Monitor"
+    Identifier "HeadlessMonitor"
+    ${modeline}
+    HorizSync 5.0 - 1000.0
+    VertRefresh 5.0 - 240.0
+    Option "Enable" "True"
+EndSection
+
+Section "Device"
+    Identifier "NvidiaGPU"
+    Driver "nvidia"
+    BusID "${bus_id}"
+    Option "AllowEmptyInitialConfiguration" "True"
+    Option "AllowExternalGpus" "True"
+    Option "ConnectedMonitor" "${display_output}"
+    Option "MetaModes" "${display_output}: ${mode_name} +0+0"
+    Option "ModeValidation" "NoDFPNativeResolutionCheck, NoVirtualSizeCheck, NoMaxPClkCheck, NoEdidMaxPClkCheck, NoMaxSizeCheck, NoHorizSyncCheck, NoVertRefreshCheck, NoWidthAlignmentCheck, NoTotalSizeCheck, NoDualLinkDVICheck, NoDisplayPortBandwidthCheck, AllowNon3DVisionModes, AllowNonHDMI3DModes, AllowNonEdidModes, NoEdidHDMI2Check, AllowDpInterlaced"
+${mode_debug_option}
+EndSection
+
+Section "Screen"
+    Identifier "HeadlessScreen"
+    Device "NvidiaGPU"
+    Monitor "HeadlessMonitor"
+    DefaultDepth ${DISPLAY_CDEPTH}
+    Option "TwinView" "True"
+    Option "ProbeAllGpus" "False"
+    Option "BaseMosaic" "False"
+    SubSection "Display"
+        Depth ${DISPLAY_CDEPTH}
+        Virtual ${DISPLAY_SIZEW} ${DISPLAY_SIZEH}
+        Modes "${mode_name}"
+    EndSubSection
+EndSection
+
+Section "ServerFlags"
+    Option "AutoAddGPU" "False"
+EndSection
+EOF
+    chmod 0644 "${xorg_config_tmp}"
+    mv -f "${xorg_config_tmp}" /etc/X11/xorg.conf
 }
 
-# Allow anybody for running x server
-function configure_x_server {
-    # Configure x to be run by anyone
+# Configure Xorg service selection and runtime directories.
+configure_x_server() {
     if [[ ! -f /etc/X11/Xwrapper.config ]]; then
         print_step_header "Create Xwrapper.config"
-        echo 'allowed_users=anybody' > /etc/X11/Xwrapper.config
-        echo 'needs_root_rights=yes' >> /etc/X11/Xwrapper.config
-    elif grep -Fxq "allowed_users=console" /etc/X11/Xwrapper.config; then
-        print_step_header "Configure Xwrapper.config"
-        sed -i "s/allowed_users=console/allowed_users=anybody/" /etc/X11/Xwrapper.config
-        echo 'needs_root_rights=yes' >> /etc/X11/Xwrapper.config
+        printf 'allowed_users=anybody\nneeds_root_rights=yes\n' >/etc/X11/Xwrapper.config
+    else
+        sed -i 's/^allowed_users=console$/allowed_users=anybody/' /etc/X11/Xwrapper.config
+        grep -Fqx 'allowed_users=anybody' /etc/X11/Xwrapper.config || echo 'allowed_users=anybody' >>/etc/X11/Xwrapper.config
+        grep -Fqx 'needs_root_rights=yes' /etc/X11/Xwrapper.config || echo 'needs_root_rights=yes' >>/etc/X11/Xwrapper.config
     fi
 
-    # Remove previous Xorg config
     rm -f /etc/X11/xorg.conf
+    mkdir -p "${XORG_SOCKET_DIR:?}"
 
-    # Ensure the X socket path exists
-    mkdir -p ${XORG_SOCKET_DIR:?}
-
-    # Clear out old lock files
-    display_file=${XORG_SOCKET_DIR}/X${DISPLAY#:}
-    if [ -S ${display_file} ]; then
-        print_step_header "Removing ${display_file} before starting"
-        rm -f /tmp/.X${DISPLAY#:}-lock
-        rm ${display_file}
+    display_file="${XORG_SOCKET_DIR}/X${DISPLAY#:}"
+    display_lock="/tmp/.X${DISPLAY#:}-lock"
+    if [[ -S "${display_file}" || -e "${display_lock}" ]]; then
+        print_step_header "Removing stale X display files for '${DISPLAY}'"
+        rm -f "${display_lock}" "${display_file}"
     fi
 
-    # Ensure X-windows session path is owned by root 
     mkdir -p /tmp/.ICE-unix
-    chown root:root /tmp/.ICE-unix/
-    chmod 1777 /tmp/.ICE-unix/
+    chown root:root /tmp/.ICE-unix
+    chmod 1777 /tmp/.ICE-unix
 
-    # Check if this container is being run as a secondary instance
-    if ([ "${MODE}" = "p" ] || [ "${MODE}" = "primary" ]); then
-        print_step_header "Configure container as primary the X server"
-        # Enable supervisord script
+    if [[ "${MODE}" == "p" || "${MODE}" == "primary" ]]; then
+        print_step_header "Configure container as primary X server"
         sed -i 's|^autostart.*=.*$|autostart=true|' /etc/supervisor.d/xorg.ini
-    elif [ "${MODE}" == "fb" ] | [ "${MODE}" == "framebuffer" ]; then
-        print_step_header "Configure container to use a virtual framebuffer as the X server"
-        # Disable xorg supervisord script
+        sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/xvfb.ini
+    elif [[ "${MODE}" == "fb" || "${MODE}" == "framebuffer" ]]; then
+        print_step_header "Configure container to use Xvfb"
         sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/xorg.ini
-        # Enable xvfb supervisord script
         sed -i 's|^autostart.*=.*$|autostart=true|' /etc/supervisor.d/xvfb.ini
     else
-        print_step_header "Configure container with no X server"
+        print_step_header "Configure container with no local X server"
         sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/xorg.ini
+        sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/xvfb.ini
     fi
 
-    # Enable KB/Mouse input capture with Xorg if configured
-    if [ ${ENABLE_EVDEV_INPUTS:-} = "true" ]; then
-        print_step_header "Enabling evdev input class on pointers, keyboards, touchpads, touch screens, etc."
+    if [[ "${ENABLE_EVDEV_INPUTS:-false}" == "true" ]]; then
+        print_step_header "Enabling evdev input classes"
         cp -f /usr/share/X11/xorg.conf.d/10-evdev.conf /etc/X11/xorg.conf.d/10-evdev.conf
     else
         print_step_header "Leaving evdev inputs disabled"
+        rm -f /etc/X11/xorg.conf.d/10-evdev.conf
     fi
-    
-    # Configure dummy config if no monitor is connected (not applicable to NVIDIA)
-    if ([ "X${monitor_connected}" = "X" ] || [ "${FORCE_X11_DUMMY_CONFIG}" = "true" ]); then 
-        print_step_header "No monitors connected. Installing dummy xorg.conf"
-        # Use a dummy display input
+
+    if [[ "${FORCE_X11_DUMMY_CONFIG:-false}" == "true" ||
+            ( -z "${nvidia_gpu_hex_id}" && -z "${monitor_connected}" ) ]]; then
+        print_step_header "No monitor detected; installing default dummy Xorg configuration"
         cp -f /templates/xorg/xorg.dummy.conf /etc/X11/xorg.conf
     fi
 }
 
-if ([ "${MODE}" != "s" ] && [ "${MODE}" != "secondary" ]); then
-    if [[ -z ${nvidia_gpu_hex_id} ]]; then
-        print_header "Generate default xorg.conf"
-        configure_x_server
-    else
-        print_header "Generate NVIDIA xorg.conf"
-        configure_x_server
-        configure_nvidia_x_server
+if [[ "${MODE}" != "s" && "${MODE}" != "secondary" ]]; then
+    configure_x_server
+
+    if [[ "${MODE}" == "p" || "${MODE}" == "primary" ]]; then
+        if [[ -n "${nvidia_gpu_hex_id}" && "${FORCE_X11_DUMMY_CONFIG:-false}" != "true" ]]; then
+            print_header "Generate NVIDIA synthetic-display xorg.conf"
+            if ! configure_nvidia_x_server; then
+                print_error "Unable to generate NVIDIA synthetic-display xorg.conf"
+                exit 1
+            fi
+        else
+            print_header "Use default Xorg configuration"
+        fi
     fi
 fi
 

@@ -17,7 +17,7 @@ Easily deploy a Steam Docker instance in seconds.
 - Full controller support
 - Support for Flatpak and Appimage installation
 - Root access
-- Based on Debian Trixie
+- Based on Debian Bookworm
 
 ---
 ## Notes:
@@ -35,12 +35,23 @@ All files that are store outside your home directory are not persistent and will
 ### GAMES LIBRARY:
 It is recommended that you mount your games library to `/mnt/games` and configure Steam to add that path.
 
+### JC141:
+JC141 games run directly on the container's virtual Xorg desktop. Gamescope is
+not installed by default because Debian Bookworm's Gamescope 3.11.49 did not
+produce a usable nested window in this headless NVIDIA/Xorg configuration.
+Without the Gamescope executable, JC141 launchers automatically use direct X11.
+
 ### AUTO START APPLICATIONS:
 In this container, Steam is configured to automatically start. If you wish to add additional services to automatically start, 
 add them under **Applications > Settings > Session and Startup** in the WebUI.
 
 ### NETWORK MODE:
-If you want to use the container as a Steam Remote Play (previously "In Home Streaming") host device you should create a custom network and assign this container it's own IP, if you don't do this the traffic will be routed through the internet since Steam thinks you are on a different network.
+Use host networking for a standalone primary container. Sunshine creates its
+input devices after Xorg starts, and Xorg must receive the corresponding udev
+hotplug events from the host network namespace. A custom macvlan or ipvlan IP
+can stream video while leaving Moonlight keyboard, mouse, and controller input
+unavailable. See the platform installation guides for the required device and
+capability settings.
 
 ### USING HOST X SERVER:
 If your host is already running X, you can just use that. To do this, be sure to configure:

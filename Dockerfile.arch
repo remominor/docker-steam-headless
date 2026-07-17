@@ -388,7 +388,10 @@ RUN \
 RUN \
     echo "**** Install stable sunshine ****" \
         && su - default -c "yay -Syu --noconfirm --needed miniupnpc sunshine-bin" \
-        && setcap cap_sys_admin+p $(readlink -f $(which sunshine)) \
+        && install -Dm0755 \
+            "$(readlink -f "$(command -v sunshine)")" \
+            /opt/sunshine-native/sunshine \
+        && setcap cap_sys_admin+p /opt/sunshine-native/sunshine \
     && \
     echo "**** Section cleanup ****" \
 	    && pacman -Scc --noconfirm \
@@ -462,12 +465,30 @@ RUN \
 # Add FS overlay
 COPY overlay /
 
+# Keep shared overlay launchers executable regardless of the source checkout's
+# filesystem semantics.
+RUN \
+    chmod 0755 \
+        /etc/cont-init.d/*.sh \
+        /usr/bin/common-functions.sh \
+        /usr/bin/configure_firefox.sh \
+        /usr/bin/drop_caches.sh \
+        /usr/bin/install_flatseal.sh \
+        /usr/bin/install_protonup.sh \
+        /usr/bin/open-sunshine-webui.sh \
+        /usr/bin/set-custom-res.sh \
+        /usr/bin/sunshine \
+        /usr/bin/start-*.sh \
+        /usr/bin/steam-headless-wol-power-manager \
+        /usr/bin/sunshine-run \
+        /usr/bin/sunshine-stop \
+        /usr/bin/xfce4-close-all-windows \
+        /usr/bin/xfce4-minimise-all-windows
+
 # Tweaks as flatpak issue isn't sorted
 RUN \
     echo "**** Tweaks for Arch ****" \
-        && sed -i d /usr/bin/install_firefox.sh \
         && sed -i d /usr/bin/install_protonup.sh \
-        && sed -i d /templates/home_directory_template/.local/share/xfce4/helpers/custom-WebBrowser.desktop \
     && \
     echo
 
@@ -477,11 +498,13 @@ ENV \
     DISPLAY_REFRESH="120" \
     DISPLAY_SIZEH="900" \
     DISPLAY_SIZEW="1600" \
-    DISPLAY_VIDEO_PORT="DFP" \
+    DISPLAY_VIDEO_PORT="DP-0" \
+    XORG_MODE_DEBUG="false" \
     DISPLAY=":55"
 ENV \
     NVIDIA_DRIVER_CAPABILITIES="all" \
-    NVIDIA_VISIBLE_DEVICES="all"
+    NVIDIA_VISIBLE_DEVICES="all" \
+    NVIDIA_PRIMARY_GPU=""
 
 # Set container configuration environment variables
 # APPIMAGE_EXTRACT_AND_RUN="0" 
@@ -492,8 +515,10 @@ ENV \
     NEKO_PASSWORD=neko \
     NEKO_PASSWORD_ADMIN=admin \
     ENABLE_STEAM="true" \
+    STEAM_AUTO_INSTALL="true" \
     STEAM_ARGS="-silent" \
     ENABLE_SUNSHINE="true" \
+    SUNSHINE_CSRF_ALLOWED_ORIGINS="" \
     ENABLE_EVDEV_INPUTS="true" \
     ENABLE_WOL_POWER_MANAGER="false" 
 

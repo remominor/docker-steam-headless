@@ -1,2 +1,4 @@
-config
-devops
+**
+!Dockerfile*
+!overlay/
+!overlay/**

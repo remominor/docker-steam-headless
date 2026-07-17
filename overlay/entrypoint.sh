@@ -12,9 +12,8 @@
 set -e
 
 # If a command was passed, run that instead of the usual init process
-if [ ! -z "$@" ]; then
-    exec $@
-    exit $?
+if (( $# > 0 )); then
+    exec "$@"
 fi
 
 # Print the current version (if the file exists)
@@ -57,9 +56,9 @@ done
 touch /tmp/.first-run-init-scripts
 
 # Execute any user generated init scripts
-mkdir -p ${USER_HOME:?}/init.d
-chown -R ${USER:?} ${USER_HOME:?}/init.d
-for user_init_script in ${USER_HOME:?}/init.d/*.sh ; do
+mkdir -p "${USER_HOME:?}/init.d"
+chown -R "${USER:?}" "${USER_HOME:?}/init.d"
+for user_init_script in "${USER_HOME:?}"/init.d/*.sh ; do
 
     # Check that a file was found 
     # (If no files exist in this directory, then user_init_script will be empty)

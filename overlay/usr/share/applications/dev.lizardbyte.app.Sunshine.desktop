@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Sunshine
+Comment=Open the Sunshine streaming server Web UI
+Exec=/usr/bin/open-sunshine-webui.sh
+Icon=dev.lizardbyte.app.Sunshine
+Terminal=false
+StartupNotify=true
+Categories=Network;RemoteAccess;
+Keywords=gamestream;stream;moonlight;remote play;
+OnlyShowIn=XFCE;

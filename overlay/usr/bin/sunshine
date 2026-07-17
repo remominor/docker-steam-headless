@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+set -e
+
+# Debian extracts the official AppImage during the image build. Arch preserves
+# its packaged binary before applying the shared filesystem overlay.
+if [[ -x /opt/sunshine/AppRun ]]; then
+    exec /opt/sunshine/AppRun "$@"
+fi
+
+exec /opt/sunshine-native/sunshine "$@"

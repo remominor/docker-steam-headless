@@ -8,7 +8,7 @@ Encoding=UTF-8
 Type=Application
 Name=Steam
 Comment=Launch steam on login
-Exec=/usr/games/steam %U ${STEAM_ARGS:-}
+Exec=/usr/bin/start-steam.sh %U ${STEAM_ARGS:-}
 Icon=steam
 OnlyShowIn=XFCE;
 RunHook=0
@@ -86,6 +86,23 @@ EOF
 )"
 
 if [ "${ENABLE_STEAM:-}" = "true" ]; then
+    # Override Debian's stock menu entry so manual launches use the same X11
+    # display detection wrapper as autostart and Supervisor.
+    mkdir -p "${USER_HOME:?}/.local/share/applications"
+    cat >"${USER_HOME:?}/.local/share/applications/steam.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Steam
+Comment=Application for managing and playing games on Steam
+Exec=/usr/bin/start-steam.sh %U ${STEAM_ARGS:-}
+Icon=steam
+Terminal=false
+Categories=Network;FileTransfer;Game;
+MimeType=x-scheme-handler/steam;x-scheme-handler/steambeta;
+StartupNotify=true
+EOF
+    chown "${USER:?}:${USER:?}" "${USER_HOME:?}/.local/share/applications/steam.desktop"
+
     if [ "${MODE}" == "s" ] || [ "${MODE}" == "secondary" ]; then
         print_step_header "Enable Steam supervisor.d service"
         sed -i 's|^autostart.*=.*$|autostart=true|' /etc/supervisor.d/steam.ini

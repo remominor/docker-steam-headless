@@ -3,7 +3,7 @@ print_header "Configure Neko"
 # REF: https://neko.m1k1o.net/#/getting-started/configuration
 
 if ([ "${MODE}" != "s" ] && [ "${MODE}" != "secondary" ]); then
-    if [ ${WEB_UI_MODE} = "neko" ]; then
+    if [ "${WEB_UI_MODE:-}" = "neko" ]; then
         print_step_header "Enable Neko server"
         sed -i 's|^autostart.*=.*$|autostart=true|' /etc/supervisor.d/neko.ini
 
@@ -13,7 +13,7 @@ if ([ "${MODE}" != "s" ] && [ "${MODE}" != "secondary" ]); then
         chown ${USER} /var/log/neko
         
         # Configure nat1to1 if it is not already set
-        if [[ -z ${NEKO_NAT1TO1} ]]; then
+        if [[ -z "${NEKO_NAT1TO1:-}" ]]; then
             export NEKO_NAT1TO1=$(ip route get 1 | awk '{print $(NF-2);exit}')
             print_step_header "Setting NEKO_NAT1TO1=${NEKO_NAT1TO1}"
         else
@@ -35,14 +35,16 @@ if ([ "${MODE}" != "s" ] && [ "${MODE}" != "secondary" ]); then
         # fi
 
         # Configure screen size if it is not already set
-        if [[ -z ${NEKO_SCREEN} ]]; then
+        if [[ -z "${NEKO_SCREEN:-}" ]]; then
             export NEKO_SCREEN="${DISPLAY_SIZEW}x${DISPLAY_SIZEH}@${DISPLAY_REFRESH}"
         fi
     else
         print_step_header "Disable Neko server"
+        sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/neko.ini
     fi
 else
     print_step_header "Neko server not available when container is run in 'secondary' mode"
+    sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/neko.ini
 fi
 
 echo -e "\e[34mDONE\e[0m"

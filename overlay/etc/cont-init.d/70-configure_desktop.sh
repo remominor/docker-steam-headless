@@ -11,11 +11,13 @@ fi
 
 # Setup home directory
 if [[ ! -f /tmp/.home-directory-template-updated ]]; then
-    print_step_header "Ensure home directory template is owned by the default user."
-    chown -R ${PUID}:${PGID} /templates/home_directory_template
-    print_step_header "Installing default home directory template"
+    print_step_header "Installing missing files from the default home directory template"
     mkdir -p "${USER_HOME:?}"
-    rsync -aq /templates/home_directory_template/ "${USER_HOME:?}"/
+    rsync -rltq \
+        --ignore-existing \
+        --chown="${PUID:?}:${PGID:?}" \
+        /templates/home_directory_template/ \
+        "${USER_HOME:?}"/
     touch /tmp/.home-directory-template-updated
 fi
 

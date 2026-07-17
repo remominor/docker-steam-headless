@@ -21,9 +21,73 @@ In order for it to do this you need to have either the Nvidia-Driver or Radeon-T
 1. Install the [Nvidia-Driver Plugin](https://forums.unraid.net/topic/98978-plugin-nvidia-driver/) by [ich777](https://forums.unraid.net/profile/72388-ich777/). This will maintain an up-to-date NVIDIA driver installation on your Unraid server.
 ![](./images/unraid-nvidia-plugin.png)
 2. Toggle the steam-headless Docker Container template editor to "**Advanced View**".
-3. In the "**Extra Parameters**" field, ensure that you have the "--runtime=nvidia" parameter added.
+3. In the "**Extra Parameters**" field, ensure that you have the `--runtime=nvidia` parameter added.
 ![](./images/unraid-steam-headless-template-nvidia-extra-params.png)
-4. (Optional - This step is only necessary if you only multiple NVIDIA GPUs. If you have a single GPU, then leaving this as "all" is fine.) Expand the **Show more settings...** section near the bottom of the template. In the **Nvidia GPU UUID**: (NVIDIA_VISIBLE_DEVICES) variable, copy your GPU UUID (can be found in the Unraid Nvidia Plugin. See that forum thread for details).
+4. Expand **Show more settings...** near the bottom of the template and set
+   **Nvidia GPU UUID** (`NVIDIA_VISIBLE_DEVICES`). Normally this is the UUID of
+   the GPU assigned to the container. On affected multi-GPU driver versions,
+   use the comma-separated workaround described below. The UUIDs are shown by
+   the Unraid Nvidia Driver plugin or by `nvidia-smi -L`.
+5. Use one GPU-selection mechanism. When `NVIDIA_VISIBLE_DEVICES` contains the
+   selected UUID or UUID list, do not also add a conflicting
+   `--gpus=device=...` selector to **Extra Parameters**. Leave
+   `NVIDIA_DRIVER_CAPABILITIES=all` enabled because the container requires
+   compute, graphics, utility, video, and display capabilities.
+6. Do not install or select an NVIDIA driver version inside the container. The
+   NVIDIA runtime supplies userspace libraries and the Xorg module that match
+   the Unraid host driver. The container validates those files at startup.
+
+#### NVENC on multi-GPU hosts
+
+NVIDIA Linux driver branches 570, 580, and 595 have a known container
+regression on multi-GPU hosts when only a subset of the GPUs is exposed. CUDA
+and Xorg may work while FFmpeg and Sunshine fail with
+`OpenEncodeSessionEx failed: unsupported device (2)`. NVIDIA reports the fix in
+the 610 driver branch. Prefer a 610-or-newer Unraid NVIDIA driver when it is
+available for the installed Unraid kernel. See the
+[NVIDIA multi-GPU NVENC discussion](https://forums.developer.nvidia.com/t/nvenc-and-nvdec-work-on-only-one-gpu-with-multi-gpu-setups-with-nvidia-container-toolkit-in-driver-565/347361).
+
+If an affected driver must be retained, expose every NVIDIA GPU to the
+container as a comma-separated UUID list. Put the GPU that should run Xorg and
+Sunshine first; the container uses the first UUID as its primary display GPU.
+For example:
+
+```text
+NVIDIA_VISIBLE_DEVICES=GPU-primary-uuid,GPU-secondary-uuid
+```
+
+This works around the driver's peer-GPU initialization bug, but intentionally
+gives the container access to every listed GPU. Merely adding the secondary
+`/dev/nvidiaN` node is insufficient because the NVIDIA runtime must also include
+that GPU in its logical visible-device set. This configuration has been
+validated with two RTX 3070 GPUs and driver 595.84: Bookworm FFmpeg successfully
+encoded H.264 through `h264_nvenc` on logical GPU 0 after both UUIDs were made
+visible.
+
+### X11 AND PULSE SOCKETS
+
+A standalone container running with `MODE=primary` starts its own Xorg and PulseAudio servers. It should normally use the socket directories inside the container.
+
+Do not bind the host's `/tmp/.X11-unix` or `/tmp/pulse` directories into a standalone primary container. Shared socket mounts are only needed when another container running with `MODE=secondary` intentionally connects to this primary container's Xorg or PulseAudio server. Sharing the host directories unnecessarily can leave stale sockets behind and cause display-server restart conflicts.
+
+### STEAM FIRST INSTALLATION
+
+Debian's Steam launcher normally displays an Install/Cancel dialog before it
+downloads the proprietary client into the persistent home directory. This
+image defaults `STEAM_AUTO_INSTALL=true`, which skips only that dialog. Debian's
+launcher still downloads the official archive and verifies its SHA-256 digest
+before extracting it. Set `STEAM_AUTO_INSTALL=false` in the container template
+if you prefer to approve the installation interactively.
+
+### SUNSHINE WEB UI ORIGINS
+
+Current Sunshine releases protect state-changing Web UI requests with CSRF
+origin checks. On host networking, the startup script automatically adds the
+host's private IPv4 interface addresses on a clean configuration. If you open
+the Web UI through a DNS name, reverse proxy, or another address, add an
+explicit `SUNSHINE_CSRF_ALLOWED_ORIGINS` variable containing a comma-separated
+list such as `https://tower.local,https://192.168.1.10`. Existing values saved
+in `sunshine.conf` are preserved.
 
 ### AMD
 
@@ -32,7 +96,7 @@ In order for it to do this you need to have either the Nvidia-Driver or Radeon-T
 2. Profit
 
 
-## ADDING CONTROLLER SUPPORT:
+## REMOTE INPUT AND CONTROLLER SUPPORT:
 
 Unraid's Linux kernel by default does not have the modules required to support controller input. Steam requires these modules to be able to create the virtual "Steam Input Gamepad Emulation" device that it can then map buttons to.
 
@@ -44,7 +108,16 @@ Unraid's Linux kernel by default does not have the modules required to support c
 
 1. Install the **uinput** plugin from the **Apps** tab.
 ![](./images/unraid-steam-headless-install-uinput-plugin.png)
-2. The container will not be able to receive kernel events from the host unless the **Network Type:** is set to "*host*". Ensure that you container is configured this way.
+2. Set **Network Type** to **Host**. Sunshine creates keyboard, mouse, and
+   controller devices through `/dev/uinput` after Xorg has started. Xorg must
+   receive the resulting kernel udev events in order to attach those devices.
+   Docker bridge, macvlan, and ipvlan networks use a separate network namespace
+   and do not reliably deliver those hotplug events to Xorg in this container.
+
+   A custom container IP may allow Sunshine video and audio to connect while
+   leaving all Moonlight input nonfunctional. Enabling privileged mode or
+   changing `/dev/uinput` permissions does not correct the isolated event
+   namespace. Use host networking for the supported configuration.
 ![](./images/unraid-steam-headless-configure-network-as-host.png)
 
     > __Warning__
@@ -55,4 +128,6 @@ Unraid's Linux kernel by default does not have the modules required to support c
     - PORT_NOVNC_WEB (Default: 8083)
     - WEB_UI_MODE (Default: 'vnc' - Set to 'none' to disable the WebUI)
 
-3. No server restart is required, however. Ensure that the **steam-headless** Docker container is recreated after installing the **uinput** plugin for it to be able to detect the newly added module.
+3. No server restart is normally required. Recreate the **steam-headless**
+   container after installing the plugin or changing the network type so it can
+   detect `/dev/uinput` and join the host network namespace.

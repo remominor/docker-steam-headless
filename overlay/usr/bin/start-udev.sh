@@ -12,23 +12,32 @@ set -e
 
 # CATCH TERM SIGNAL:
 _term() {
-    kill -TERM "$monitor_pid" 2>/dev/null
+    if [[ -n "${udev_pid:-}" ]]; then
+        kill -TERM "${udev_pid}" 2>/dev/null || true
+    fi
 }
 trap _term SIGTERM SIGINT
 
 # EXECUTE PROCESS:
-# Start udev
+# Start udev in the foreground so Supervisor owns its lifetime. The old
+# --daemon plus `udevadm monitor` wrapper could leave an orphaned udevd behind
+# after a service restart.
 if command -v udevd &>/dev/null; then
-    unshare --net udevd --daemon &>/dev/null
+    udev_command=(udevd)
 else
-    unshare --net /lib/systemd/systemd-udevd --daemon &>/dev/null
+    udev_command=(/lib/systemd/systemd-udevd)
 fi
-# Monitor kernel uevents
-udevadm monitor &
-monitor_pid=$!
-# Wait for 5 seconds, then request device events from the kernel
-sleep 5
-udevadm trigger
+unshare --net "${udev_command[@]}" &
+udev_pid=$!
+
+# Wait for the daemon control socket instead of relying on a fixed delay, then
+# request the initial device events. Failure is nonfatal because Xorg can still
+# start and report an actionable input warning.
+for _ in $(seq 1 50); do
+    [[ -S /run/udev/control ]] && break
+    sleep 0.1
+done
+udevadm trigger 2>/dev/null || echo "WARNING: Unable to trigger initial udev events" >&2
 
 # WAIT FOR CHILD PROCESS:
-wait "$monitor_pid"
+wait "$udev_pid"

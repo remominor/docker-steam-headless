@@ -31,4 +31,7 @@ if ([ "${MODE}" != "s" ] && [ "${MODE}" != "secondary" ]); then
     fi
 else
     print_step_header "WoL Manager service not available when container is run in 'secondary' mode."
+    sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/wol-power-manager.ini
 fi
+
+echo -e "\e[34mDONE\e[0m"

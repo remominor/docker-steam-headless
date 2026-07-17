@@ -1,259 +1,81 @@
+#!/usr/bin/env bash
+# GPU userspace drivers must be supplied either by Debian packages installed at
+# image-build time (Intel/AMD) or by the NVIDIA container runtime. Installing a
+# full NVIDIA .run package over runtime-injected, version-matched libraries can
+# leave a mixed driver stack and makes container startup depend on the network.
 
-# Fech NVIDIA GPU device (if one exists)
-if [ "${NVIDIA_VISIBLE_DEVICES:-}" = "all" ]; then
-    export gpu_select=$(nvidia-smi --format=csv --query-gpu=uuid 2>/dev/null | sed -n 2p)
-elif [ "${NVIDIA_VISIBLE_DEVICES:-}X" = "X" ]; then
-    export gpu_select=$(nvidia-smi --format=csv --query-gpu=uuid 2>/dev/null | sed -n 2p)
-else
-    export gpu_select=$(nvidia-smi --format=csv --id=$(echo "$NVIDIA_VISIBLE_DEVICES" | cut -d ',' -f1) --query-gpu=uuid | sed -n 2p)
-    if [ "${gpu_select:-}X" = "X" ]; then
-        export gpu_select=$(nvidia-smi --format=csv --query-gpu=uuid 2>/dev/null | sed -n 2p)
+source /usr/bin/common-functions.sh
+
+gpu_selector="${NVIDIA_PRIMARY_GPU:-${NVIDIA_VISIBLE_DEVICES:-all}}"
+gpu_select=""
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+    if ! gpu_select="$(get_nvidia_gpu_id)"; then
+        print_header "NVIDIA runtime present but no GPU is visible"
+        print_error "nvidia-smi could not resolve the requested GPU selector '${gpu_selector}'"
+        print_note "Use --runtime=nvidia and verify that nvidia-smi lists at least one full GPU inside the container."
+        exit 1
     fi
 fi
 
-# NVIDIA Params
-if [ "X${gpu_select:-}" != "X" ]; then
-    export nvidia_pci_address="$(nvidia-smi --format=csv --query-gpu=pci.bus_id --id="${gpu_select:?}" 2>/dev/null | sed -n 2p | cut -d ':' -f2,3)"
-    export nvidia_gpu_name=$(nvidia-smi --format=csv --query-gpu=name --id="${gpu_select:?}" 2>/dev/null | sed -n 2p)
-    export nvidia_host_driver_version="$(nvidia-smi 2>/dev/null | grep NVIDIA-SMI | cut -d ' ' -f3)"
-fi
+if [[ -n "${gpu_select}" ]]; then
+    nvidia_gpu_name="$(get_nvidia_gpu_property "${gpu_select}" name)"
+    nvidia_pci_address="$(get_nvidia_gpu_property "${gpu_select}" pci.bus_id)"
+    nvidia_host_driver_version="$(get_nvidia_gpu_property "${gpu_select}" driver_version)"
 
-# Intel params
-# This figures out if it's an intel CPU with integrated GPU
-export intel_cpu_model="$(lscpu | grep 'Model name:' | grep -i intel | cut -d':' -f2 | xargs)"
-# We need to check if the user has an intel ARC GPU as well
-export intel_gpu_model="$(lspci | grep -i "VGA compatible controller: Intel" | cut -d':' -f3 | xargs)"
-
-# AMD params
-export amd_cpu_model="$(lscpu | grep 'Model name:' | grep -i amd | cut -d':' -f2 | xargs)"
-export amd_gpu_model="$(lspci | grep -i vga | grep -i amd)"
-
-function download_driver {
-    local driver_url
-    local stripped_version
-
-    mkdir -p "${USER_HOME:?}/Downloads"
-    chown -R ${USER:?} "${USER_HOME:?}/Downloads"
-
-    if [[ ! -f "${USER_HOME:?}/Downloads/NVIDIA_${nvidia_host_driver_version:?}.run" ]]; then
-        print_step_header "Downloading driver v${nvidia_host_driver_version:?}"
-
-        # Try downloading from a list of NVIDIA driver hosting servers
-        stripped_version="${nvidia_host_driver_version#v}" # Strip 'v' if present
-        declare -a sources=(
-            "https://download.nvidia.com/XFree86/Linux-x86_64/${nvidia_host_driver_version}/NVIDIA-Linux-x86_64-${nvidia_host_driver_version}.run"
-            "https://us.download.nvidia.com/XFree86/Linux-x86_64/${nvidia_host_driver_version}/NVIDIA-Linux-x86_64-${nvidia_host_driver_version}.run"
-            "https://github.com/flathub/org.freedesktop.Platform.GL.nvidia/releases/download/cuda/NVIDIA-Linux-x86_64-${stripped_version}.run"
-        )
-
-        for driver_url in "${sources[@]}"; do
-            if wget -q --show-progress --progress=bar:force:noscroll \
-                -O /tmp/NVIDIA.run \
-                "${driver_url:?}"; then
-                mv /tmp/NVIDIA.run "${USER_HOME:?}/Downloads/NVIDIA_${nvidia_host_driver_version:?}.run"
-                return 0
-                mv /tmp/NVIDIA.run "${USER_HOME:?}/Downloads/NVIDIA_${nvidia_host_driver_version:?}.run"
-                return 0
-            else
-                print_warning "Download failed from: ${driver_url}"
-            fi
-        done
-
-        print_note "Visit https://download.nvidia.com/XFree86/Linux-x86_64/ in a browser and find the closest match to version '${nvidia_host_driver_version:?}', then set that version in the NVIDIA_DRIVER_VERSION environment variable."
-        print_error "Unable to download driver from any source. Exit!"
-        sleep 10
-        return 1
+    if [[ ! "${nvidia_pci_address}" =~ ^[[:xdigit:]]+:[[:xdigit:]]+:[[:xdigit:]]+[.][[:xdigit:]]+$ ]]; then
+        print_error "nvidia-smi returned invalid PCI data for '${gpu_select}': '${nvidia_pci_address}'"
+        exit 1
     fi
-}
 
-function install_nvidia_driver {
-    # Check here if the currently installed version matches using nvidia-settings
-    nvidia_settings_version=$(nvidia-settings --version 2>/dev/null | grep version | cut -d ' ' -f 4)
-    if [ "${nvidia_settings_version:-}X" != "${nvidia_host_driver_version:-}X" ]; then
-        # Download the driver (if it does not yet exist locally)
-        download_driver
+    print_header "Found NVIDIA device '${nvidia_gpu_name}'"
+    print_step_header "Primary GPU: ${gpu_select} at ${nvidia_pci_address}"
+    print_step_header "Host driver: ${nvidia_host_driver_version}"
+    print_step_header "Driver capabilities: ${NVIDIA_DRIVER_CAPABILITIES:-unset}"
 
-        if (($(echo $nvidia_host_driver_version | cut -d '.' -f 1) >= 550)); then
-            sed -i 's/--no-multigpu//g' /etc/cont-init.d/70-configure_xorg.sh
+    missing_components=()
+    for library in \
+        libnvidia-cfg.so.1 \
+        libnvidia-encode.so.1 \
+        libnvidia-ml.so.1 \
+        libGLX_nvidia.so.0; do
+        if ! ldconfig -p 2>/dev/null | grep -Fq "${library}"; then
+            missing_components+=("${library}")
         fi
+    done
 
-        if (($(echo $nvidia_host_driver_version | cut -d '.' -f 1) > 500)); then
-            print_step_header "Installing NVIDIA driver v${nvidia_host_driver_version:?} to match what is running on the host"
-            chmod +x "${USER_HOME:?}/Downloads/NVIDIA_${nvidia_host_driver_version:?}.run"
-            "${USER_HOME:?}/Downloads/NVIDIA_${nvidia_host_driver_version:?}.run" \
-                --silent \
-                --accept-license \
-                --skip-depmod \
-                --skip-module-unload \
-                --no-kernel-modules \
-                --no-kernel-module-source \
-                --install-compat32-libs \
-                --no-nouveau-check \
-                --no-nvidia-modprobe \
-                --no-systemd \
-                --no-distro-scripts \
-                --no-rpms \
-                --no-backup \
-                --no-check-for-alternate-installs \
-                --no-libglx-indirect \
-                --no-install-libglvnd \
-                >"${USER_HOME:?}/Downloads/nvidia_gpu_install.log" 2>&1
-        else
-            print_step_header "Installing Legacy NVIDIA driver v${nvidia_host_driver_version:?} to match what is running on the host"
-            chmod +x "${USER_HOME:?}/Downloads/NVIDIA_${nvidia_host_driver_version:?}.run"
-            "${USER_HOME:?}/Downloads/NVIDIA_${nvidia_host_driver_version:?}.run" \
-                --silent \
-                --accept-license \
-                --skip-depmod \
-                --skip-module-unload \
-                --no-kernel-module \
-                --no-kernel-module-source \
-                --install-compat32-libs \
-                --no-nouveau-check \
-                --no-nvidia-modprobe \
-                --no-systemd \
-                --no-distro-scripts \
-                --no-rpms \
-                --no-backup \
-                --no-check-for-alternate-installs \
-                --no-libglx-indirect \
-                --no-install-libglvnd \
-                >"${USER_HOME:?}/Downloads/nvidia_gpu_install.log" 2>&1
+    nvidia_xorg_driver=""
+    for candidate in \
+        /usr/lib64/xorg/modules/drivers/nvidia_drv.so \
+        /usr/lib/x86_64-linux-gnu/nvidia/xorg/nvidia_drv.so \
+        /usr/lib/xorg/modules/drivers/nvidia_drv.so; do
+        if [[ -f "${candidate}" ]]; then
+            nvidia_xorg_driver="${candidate}"
+            break
         fi
+    done
+
+    if [[ -z "${nvidia_xorg_driver}" ]]; then
+        missing_components+=("nvidia_drv.so")
     else
-        print_step_header "NVIDIA driver version ${nvidia_settings_version:-} is already installed"
+        print_step_header "Using runtime Xorg driver: ${nvidia_xorg_driver}"
     fi
-}
 
-function patch_nvidia_driver {
-    # REF: https://github.com/keylase/nvidia-patch#docker-support
-    if [ "${NVIDIA_PATCH_VERSION:-}X" != "X" ]; then
-        # Don't fail boot if something goes wrong here. Set +e
-        (
-            set +e
-            if [ ! -f "${USER_HOME:?}/Downloads/nvidia-patch.${NVIDIA_PATCH_VERSION:?}.sh" ]; then
-                print_step_header "Fetch NVIDIA NVENC patch"
-                wget -q --show-progress --progress=bar:force:noscroll \
-                    -O "${USER_HOME:?}/Downloads/nvidia-patch.${NVIDIA_PATCH_VERSION:?}.sh" \
-                    "https://raw.githubusercontent.com/keylase/nvidia-patch/${NVIDIA_PATCH_VERSION:?}/patch.sh"
-            fi
-            if [ ! -f "${USER_HOME:?}/Downloads/nvidia-patch-fbc.${NVIDIA_PATCH_VERSION:?}.sh" ]; then
-                print_step_header "Fetch NVIDIA NvFBC patch"
-                wget -q --show-progress --progress=bar:force:noscroll \
-                    -O "${USER_HOME:?}/Downloads/nvidia-patch-fbc.${NVIDIA_PATCH_VERSION:?}.sh" \
-                    "https://raw.githubusercontent.com/keylase/nvidia-patch/${NVIDIA_PATCH_VERSION:?}/patch-fbc.sh"
-            fi
-            chmod +x \
-                "${USER_HOME:?}/Downloads/nvidia-patch.${NVIDIA_PATCH_VERSION:?}.sh" \
-                "${USER_HOME:?}/Downloads/nvidia-patch-fbc.${NVIDIA_PATCH_VERSION:?}.sh"
-
-            print_step_header "Install NVIDIA driver patches"
-            echo "/patched-lib" >/etc/ld.so.conf.d/000-patched-lib.conf
-            mkdir -p "/patched-lib"
-            PATCH_OUTPUT_DIR="/patched-lib" "${USER_HOME:?}/Downloads/nvidia-patch.${NVIDIA_PATCH_VERSION:?}.sh"
-            PATCH_OUTPUT_DIR="/patched-lib" "${USER_HOME:?}/Downloads/nvidia-patch-fbc.${NVIDIA_PATCH_VERSION:?}.sh"
-
-            pushd "/patched-lib" &>/dev/null || {
-                print_error "Failed to push directory to /patched-lib"
-                exit 1
-            }
-            for f in *; do
-                suffix="${f##*.so}"
-                name="$(basename "$f" "$suffix")"
-                [ -h "$name" ] || ln -sf "$f" "$name"
-                [ -h "$name" ] || ln -sf "$f" "$name.1"
-            done
-            ldconfig
-            popd &>/dev/null || {
-                print_error "Failed to pop directory out of /patched-lib"
-                exit 1
-            }
-        )
-    else
-        print_step_header "Leaving NVIDIA driver stock without patching"
+    if (( ${#missing_components[@]} > 0 )); then
+        print_error "The NVIDIA runtime did not provide: ${missing_components[*]}"
+        print_note "Use --runtime=nvidia with NVIDIA_DRIVER_CAPABILITIES=all; do not install a driver inside the container."
+        exit 1
     fi
-}
 
-function install_deb_mesa {
-    if [ ! -f /tmp/init-mesa-libs-install.log ]; then
-        print_step_header "Enable i386 arch"
-        dpkg --add-architecture i386
-        if [ "${ENABLE_SID:-}" = "true" ]; then
-            print_step_header "Add Debian SID sources"
-            echo "deb http://deb.debian.org/debian/ sid main" >/etc/apt/sources.list
-        fi
-        apt-get update &>>/tmp/init-mesa-libs-install.log
-        print_step_header "Install mesa vulkan drivers"
-        echo "" >>/tmp/init-mesa-libs-install.log
-        apt-get install -y --no-install-recommends \
-            libvulkan1 \
-            libvulkan1:i386 \
-            mesa-vulkan-drivers \
-            mesa-vulkan-drivers:i386 \
-            mesa-utils \
-            mesa-utils-extra \
-            vulkan-tools \
-            &>>/tmp/init-mesa-libs-install.log
-    else
-        print_step_header "Mesa has already been installed into this container"
-    fi
-}
-
-function install_amd_gpu_driver {
-    if command -v pacman &>/dev/null; then
-        print_step_header "Install AMD Mesa driver"
-        pacman -Syu --noconfirm --needed \
-            lib32-vulkan-icd-loader \
-            lib32-vulkan-radeon \
-            vulkan-icd-loader \
-            vulkan-radeon
-    elif command -v apt-get &>/dev/null; then
-        install_deb_mesa
-    fi
-}
-
-function install_intel_gpu_driver {
-    if command -v pacman &>/dev/null; then
-        print_step_header "Install Intel Mesa driver"
-        pacman -Syu --noconfirm --needed \
-            lib32-vulkan-icd-loader \
-            lib32-vulkan-intel \
-            vulkan-icd-loader \
-            vulkan-intel
-    elif command -v apt-get &>/dev/null; then
-        install_deb_mesa
-    fi
-}
-
-# Intel Arc GPU or Intel CPU with possible iGPU
-if [ "${intel_gpu_model:-}X" != "X" ]; then
-    print_header "Found Intel device '${intel_gpu_model:?}'"
-    install_intel_gpu_driver
-elif [ "${intel_cpu_model:-}X" != "X" ]; then
-    print_header "Found Intel device '${intel_cpu_model:?}'"
-    install_intel_gpu_driver
+    print_step_header "Using the host-matched NVIDIA runtime driver stack"
+elif [[ -n "$(lspci 2>/dev/null | grep -i 'VGA compatible controller:.*AMD' || true)" ]]; then
+    print_header "Found AMD graphics device"
+    print_step_header "Using Mesa/Vulkan drivers installed in the image"
+elif [[ -n "$(lspci 2>/dev/null | grep -i 'VGA compatible controller:.*Intel' || true)" ]]; then
+    print_header "Found Intel graphics device"
+    print_step_header "Using Mesa/Vulkan drivers installed in the image"
 else
-    print_header "No Intel device found"
-fi
-# AMD GPU
-if [ "${amd_gpu_model:-}X" != "X" ]; then
-    print_header "Found AMD device '${amd_gpu_model:?}'"
-    install_amd_gpu_driver
-else
-    print_header "No AMD device found"
-fi
-# NVIDIA GPU
-if [ "${NVIDIA_DRIVER_VERSION:-}X" != "X" ]; then
-    export nvidia_host_driver_version="${NVIDIA_DRIVER_VERSION:?}"
-    print_header "Forcing install of NVIDIA driver version '${nvidia_host_driver_version:?}' because the 'NVIDIA_DRIVER_VERSION' variable is set."
-    install_nvidia_driver
-    patch_nvidia_driver
-elif [ "${nvidia_pci_address:-}X" != "X" ]; then
-    print_header "Found NVIDIA device '${nvidia_gpu_name:?}'"
-    install_nvidia_driver
-    patch_nvidia_driver
-else
-    print_header "No NVIDIA device found"
+    print_header "No supported GPU device found"
 fi
 
 echo -e "\e[34mDONE\e[0m"

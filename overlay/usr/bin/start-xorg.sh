@@ -13,14 +13,16 @@ source /usr/bin/common-functions.sh
 
 # CATCH TERM SIGNAL:
 _term() {
-    kill -TERM "$xorg_pid" 2>/dev/null
+    if [[ -n "${xorg_pid:-}" ]]; then
+        kill -TERM "${xorg_pid}" 2>/dev/null || true
+    fi
 }
 trap _term SIGTERM SIGINT
 
 
 # EXECUTE PROCESS:
 # Wait for udev
-if [ $(grep autostart /etc/supervisor.d/udev.ini 2> /dev/null) == "autostart=true" ]; then
+if grep -Eq '^autostart[[:space:]]*=[[:space:]]*true$' /etc/supervisor.d/udev.ini 2>/dev/null; then
     wait_for_udev
 fi
 # Run X server

@@ -17,16 +17,28 @@ USER_PASSWORD=${USER_PASSWORD:-password}
 print_header "Configure default user"
 
 print_step_header "Setting default user uid=${PUID}(${USER}) gid=${PGID}(${USER})"
-usermod -o -u "${PUID}" ${USER}
-groupmod -o -g "${PGID}" ${USER}
+usermod -o -u "${PUID}" "${USER}"
+groupmod -o -g "${PGID}" "${USER}"
+
+
+# Xorg is started with -ac, so it does not require an authentication cookie.
+# Some sandboxed launchers nevertheless require XAUTHORITY to reference an
+# existing file before bind-mounting it into the sandbox.
+XAUTHORITY=${XAUTHORITY:-${USER_HOME}/.Xauthority}
+export XAUTHORITY
+print_step_header "Create X authority placeholder '${XAUTHORITY}'"
+mkdir -p "$(dirname "${XAUTHORITY}")"
+touch "${XAUTHORITY}"
+chown "${PUID}:${PGID}" "${XAUTHORITY}"
+chmod 600 "${XAUTHORITY}"
 
 
 print_step_header "Adding default user to any additional required device groups"
-additional_groups=( video audio input pulse sudo )
+additional_groups=( video audio input pulse )
 for group_name in "${additional_groups[@]}"; do
-    if [ $(getent group ${group_name:?}) ]; then
+    if getent group "${group_name:?}" >/dev/null; then
         print_step_header "Adding user '${USER}' to group: '${group_name}'"
-        usermod -aG ${group_name:?} ${USER}
+        usermod -aG "${group_name:?}" "${USER}"
     fi
 done
 device_nodes=( /dev/uinput /dev/input/event* /dev/dri/* )
@@ -49,30 +61,30 @@ for dev in "${device_nodes[@]}"; do
     # Create a name for the group ID if it does not yet already exist
     if [[ "${dev_group}" = "UNKNOWN" ]]; then
         dev_group="user-gid-${dev_gid}"
-        groupadd -g $dev_gid "${dev_group}"
+        groupadd -g "${dev_gid}" "${dev_group}"
     fi
 
     # Add group to user
     if [[ "${added_groups}" != *"${dev_group}"* ]]; then
         print_step_header "Adding user '${USER}' to group: '${dev_group}' for device: ${dev}"
-        usermod -aG ${dev_group} ${USER}
+        usermod -aG "${dev_group}" "${USER}"
         added_groups=" ${added_groups} ${dev_group} "
     fi
 done
 
 
 print_step_header "Setting umask to ${UMASK}";
-umask ${UMASK}
+umask "${UMASK}"
 
 
 # TODO: Move this to its own 'display' init script. It does not really belong here
 # Configure the 'XDG_RUNTIME_DIR' path
 print_step_header "Create the user XDG_RUNTIME_DIR path '${XDG_RUNTIME_DIR}'"
-mkdir -p ${XDG_RUNTIME_DIR}
+mkdir -p "${XDG_RUNTIME_DIR}"
 # Ensure it is owned by the 'default' user
-chown -R ${PUID}:${PGID} ${XDG_RUNTIME_DIR}
+chown -R "${PUID}:${PGID}" "${XDG_RUNTIME_DIR}"
 # Ensure only the 'default' user can access this directory
-chmod 700 ${XDG_RUNTIME_DIR}
+chmod 700 "${XDG_RUNTIME_DIR}"
 # Set the default background
 mkdir -p /etc/alternatives
 ln -sf /usr/share/backgrounds/steam.jpg /etc/alternatives/desktop-background

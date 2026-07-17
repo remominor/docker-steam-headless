@@ -2,7 +2,11 @@
 # Configure dbus
 print_header "Configure udevd"
 
-# Since this container may also be run with CAP_SYS_ADMIN, ensure we can actually execute "udevadm trigger"
+# Reset Supervisor state so changing privileges between container restarts does
+# not leave the previous fallback command selected.
+sed -i 's|^command.*=.*$|command=/usr/bin/start-udev.sh|' /etc/supervisor.d/udev.ini
+sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/udev.ini
+
 run_dumb_udev="false"
 if [ ! -w /sys ]; then
     # Disable supervisord script since we are not able to write to sysfs
@@ -19,7 +23,8 @@ elif [ ! -w /run/udev ]; then
     print_step_header "Disable udevd - /run/udev is mounted RO"
     sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/udev.ini
     run_dumb_udev="false"
-elif udevadm trigger &> /dev/null; then
+elif command -v udevadm >/dev/null 2>&1 &&
+        { command -v udevd >/dev/null 2>&1 || [[ -x /lib/systemd/systemd-udevd ]]; }; then
     print_step_header "Configure container to run udev management"
     # Enable supervisord script
     sed -i 's|^autostart.*=.*$|autostart=true|' /etc/supervisor.d/udev.ini
@@ -29,8 +34,7 @@ elif udevadm trigger &> /dev/null; then
     fi
     run_dumb_udev="false"
 else
-    # Disable supervisord script since we are not able to execute "udevadm trigger"
-    print_step_header "Disable udev service due to privilege restrictions"
+    print_step_header "Disable udev service because the required binaries are unavailable"
     sed -i 's|^autostart.*=.*$|autostart=false|' /etc/supervisor.d/udev.ini
     run_dumb_udev="true"
 fi
@@ -38,7 +42,7 @@ fi
 if [ "${run_dumb_udev}" = "true" ]; then
     # Enable dumb-udev instead of udevd
     print_step_header "Enable dumb-udev service"
-    sed -i 's|^command.*=.*$|command=start-dumb-udev.sh|' /etc/supervisor.d/udev.ini
+    sed -i 's|^command.*=.*$|command=/usr/bin/start-dumb-udev.sh|' /etc/supervisor.d/udev.ini
     sed -i 's|^autostart.*=.*$|autostart=true|' /etc/supervisor.d/udev.ini
 fi
 

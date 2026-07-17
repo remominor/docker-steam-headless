@@ -1,22 +1,23 @@
 
-# Configure dbus
-print_header "Configure local"
+# Configure locale
+print_header "Configure locale"
 
-current_local=$(head -n 1 /etc/locale.gen)
-user_local=$(echo ${USER_LOCALES} | cut -d ' ' -f 1)
+user_locale="${USER_LOCALES%% *}"
 
-if [ "${current_local}" != "${USER_LOCALES}" ]; then
+if ! grep -Fqx "${USER_LOCALES}" /etc/locale.gen; then
     print_step_header "Configuring Locales to ${USER_LOCALES}"
-	rm /etc/locale.gen
-	echo -e "${USER_LOCALES}\nen_US.UTF-8 UTF-8" > "/etc/locale.gen"
-	export LANGUAGE="${user_local}"
-	export LANG="${user_local}"
-	export LC_ALL="${user_local}" 2> /dev/null
-	sleep 0.5
-	locale-gen
-	update-locale LC_ALL="${user_local}"
+    {
+        printf '%s\n' "${USER_LOCALES}"
+        [[ "${USER_LOCALES}" == "en_US.UTF-8 UTF-8" ]] || printf '%s\n' 'en_US.UTF-8 UTF-8'
+    } > /etc/locale.gen
+    locale-gen
 else
     print_step_header "Locales already set correctly to ${USER_LOCALES}"
 fi
+
+export LANGUAGE="${user_locale}"
+export LANG="${user_locale}"
+export LC_ALL="${user_locale}"
+update-locale LANG="${user_locale}" LANGUAGE="${user_locale}" LC_ALL="${user_locale}"
 
 echo -e "\e[34mDONE\e[0m"

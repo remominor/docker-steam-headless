@@ -6,7 +6,18 @@ print_header "Configure pulseaudio"
 print_step_header "Enable pulseaudio service."
 sed -i 's|^autostart.*=.*$|autostart=true|' /etc/supervisor.d/pulseaudio.ini
 
-if [ "${MODE}" == "s" ] | [ "${MODE}" == "secondary" ]; then
+# PulseAudio shared-memory transports cannot be used reliably by clients
+# running in a different IPC/mount namespace. JC141 launches Wine through
+# bubblewrap, where memfd mappings otherwise fail and can prevent audio (and
+# some games) from initializing. Force socket-based sample transport for all
+# clients; PULSE_SERVER continues to use the local Unix socket configured below.
+install -d -m 755 /etc/pulse/client.conf.d
+printf '%s\n' \
+    'enable-shm = no' \
+    'enable-memfd = no' \
+    > /etc/pulse/client.conf.d/99-jc141-bwrap.conf
+
+if [ "${MODE}" == "s" ] || [ "${MODE}" == "secondary" ]; then
     print_step_header "Configure pulseaudio as simple dummy audio"
     sed -i 's|^; autospawn.*$|autospawn = no|' /etc/pulse/client.conf
     sed -i 's|^; daemon-binary.*$|daemon-binary = /bin/true|' /etc/pulse/client.conf
@@ -32,10 +43,10 @@ else
     sed -i 's|^; daemon-binary.*$|daemon-binary = /bin/true|' /etc/pulse/client.conf
 
     # Enable debug logging
-    if [ "X${DEBUGGING:-}" == "X" ]; then
+    if [ "${DEBUGGING:-false}" == "true" ]; then
         sed -i 's|^; log-level.*$|log-level = debug|' /etc/pulse/daemon.conf
     fi
 fi
-chown -R ${USER} /etc/pulse
+chown -R "${USER}" /etc/pulse
 
 echo -e "\e[34mDONE\e[0m"

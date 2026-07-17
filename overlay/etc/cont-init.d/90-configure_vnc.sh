@@ -2,13 +2,24 @@
 print_header "Configure VNC"
 
 function get_next_unused_port() {
-    local __start_port=${1}
-    local __start_port=$((__start_port+1))
-    local __netstat_report=$(netstat -atulnp 2> /dev/null)
-    for __check_port in $(seq ${__start_port} 65000); do
-        [[ -z $(echo "${__netstat_report}" | grep ${__check_port}) ]] && break;
+    local __start_port=$(( ${1:?} + 1 ))
+    local __used_ports
+    local __check_port
+
+    __used_ports="$(netstat -lntu 2>/dev/null | awk 'NR > 2 {
+        address = $4
+        sub(/^.*:/, "", address)
+        if (address ~ /^[0-9]+$/) print address
+    }' | sort -u)"
+
+    for __check_port in $(seq "${__start_port}" 65000); do
+        if ! grep -Fxq "${__check_port}" <<<"${__used_ports}"; then
+            echo "${__check_port}"
+            return 0
+        fi
     done
-    echo ${__check_port}
+    print_error "No unused TCP/UDP port found after ${__start_port}"
+    return 1
 }
 
 # Configure random ports for VNC service, pulseaudio socket, noVNC service and audio transport websocket

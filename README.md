@@ -10,6 +10,7 @@ Easily deploy a Steam Docker instance in seconds.
 
 ## Features:
 - Steam Client configured for running on Linux with Proton
+- Gamescope installed for nested game sessions and scaling
 - Moonlight compatible server for easy remote desktop streaming
 - Easy installation of EmeDeck, Heroic and Lutris via Flatpak
 - Full video/audio noVNC web access to a Xfce4 Desktop
@@ -43,9 +44,21 @@ the fix persisted across container restarts. Try this before resetting existing
 appdata if the same behavior occurs.
 
 ### GAMESCOPE:
-Gamescope is not installed by default. Debian Trixie currently publishes it
-through backports rather than the base repository, and nested operation in this
-headless NVIDIA/Xorg configuration has not yet been revalidated.
+Gamescope is installed from Debian Trixie backports. Nested operation has been
+validated with `vkcube` and Steam games in the headless NVIDIA/Xorg
+configuration, although compatibility can still vary by game and GPU driver. A
+typical Steam launch option is:
+
+```text
+gamescope -f -- %command%
+```
+
+### SUNSHINE:
+Sunshine is installed from the pinned official Debian Trixie package. The
+container continues to manage Sunshine through its existing Supervisor service
+and launcher rather than the package's systemd user service. Startup and NVENC
+operation have been validated with existing appdata on the headless NVIDIA/Xorg
+configuration.
 
 ### AUTO START APPLICATIONS:
 In this container, Steam is configured to automatically start. If you wish to add additional services to automatically start, 
@@ -88,12 +101,6 @@ For a development environment, I have created a script in the devops directory.
 ## TODO:
 - Remove SSH
 - Require user to enter password for sudo
-- Evaluate replacing the pinned Sunshine AppImage with the pinned native
-  `sunshine-debian-trixie-amd64.deb`. Verify container-safe package installation,
-  udev/capability setup, the shared launcher, NVENC, Moonlight input, tray
-  behavior, and final image size.
-- Install Gamescope from Trixie backports and test nested operation with the
-  headless NVIDIA/Xorg configuration before enabling it by default.
 - Document how to run this container:
     - Other server OS
     - TrueNAS Scale 

@@ -6,6 +6,13 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN \
     echo "**** Update apt database ****" \
         && sed -i '/^Components: main/ s/$/ contrib non-free/' /etc/apt/sources.list.d/debian.sources \
+        && printf '%s\n' \
+            'Types: deb' \
+            'URIs: http://deb.debian.org/debian' \
+            'Suites: trixie-backports' \
+            'Components: main contrib non-free' \
+            'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+            > /etc/apt/sources.list.d/trixie-backports.sources \
     && \
     echo
 
@@ -537,15 +544,19 @@ RUN \
     && \
     echo
 
-# Install Steam
+# Install Steam and Gamescope
 RUN \
     echo "**** Update apt database ****" \
         && apt-get update \
     && \
-    echo "**** Install Steam ****" \
+    echo "**** Install Steam and Gamescope ****" \
         && apt-get install -y --no-install-recommends \
+            gamescope/trixie-backports \
             steam-installer \
         && ln -sf /usr/games/steam /usr/bin/steam \
+        && ln -sf /usr/games/gamescope* /usr/bin/ \
+        && test -x /usr/bin/gamescope \
+        && test -x /usr/bin/gamescopereaper \
     && \
     echo "**** Allow an explicitly requested unattended first Steam bootstrap ****" \
         && sed -i \
@@ -563,34 +574,39 @@ RUN \
     && \
     echo
 
-# Install the pinned official Sunshine AppImage instead of following a mutable
-# distro package. Extract it at build time so runtime does not require another
-# FUSE mount.
+# Install the pinned official Sunshine package built for Debian Trixie. Preserve
+# its native binary before the shared overlay installs the launcher wrapper.
+# Its post-install script also performs host kernel and live udev operations;
+# shadow those during the image build and let container startup apply the rules.
 ARG SUNSHINE_VERSION=2026.516.143833
-ARG SUNSHINE_APPIMAGE_SHA256=d0ee0a9cfb66f27869b559455f84622d21615047ccf3443c9a2f572ca971c7a2
+ARG SUNSHINE_DEB_SHA256=b9b65f2be93b3e30be0710a940a616b1381da5bc6d858dce33bc0094d7fd4131
 RUN \
     echo "**** Update apt database ****" \
         && apt-get update \
     && \
     echo "**** Install Sunshine requirements ****" \
-        && apt-get install -y \
-            libayatana-appindicator3-1 \
-            libnotify4 \
+        && apt-get install -y --no-install-recommends \
+            libcap2-bin \
             va-driver-all \
     && \
     echo "**** Install Sunshine ****" \
         && wget --quiet \
-            -O /tmp/sunshine.AppImage \
-            "https://github.com/LizardByte/Sunshine/releases/download/v${SUNSHINE_VERSION}/sunshine.AppImage" \
-        && echo "${SUNSHINE_APPIMAGE_SHA256:?}  /tmp/sunshine.AppImage" | sha256sum -c - \
-        && chmod 0755 /tmp/sunshine.AppImage \
-        && cd /opt \
-        && /tmp/sunshine.AppImage --appimage-extract >/dev/null \
-        && mv /opt/squashfs-root /opt/sunshine \
-        && install -d /usr/share/icons/hicolor \
-        && cp -a \
-            /opt/sunshine/usr/share/icons/hicolor/. \
-            /usr/share/icons/hicolor/ \
+            -O /tmp/sunshine.deb \
+            "https://github.com/LizardByte/Sunshine/releases/download/v${SUNSHINE_VERSION}/sunshine-debian-trixie-amd64.deb" \
+        && echo "${SUNSHINE_DEB_SHA256:?}  /tmp/sunshine.deb" | sha256sum -c - \
+        && install -d /tmp/sunshine-install-bin \
+        && printf '%s\n' '#!/bin/sh' 'exit 0' \
+            > /tmp/sunshine-install-bin/modprobe \
+        && cp /tmp/sunshine-install-bin/modprobe \
+            /tmp/sunshine-install-bin/udevadm \
+        && chmod 0755 /tmp/sunshine-install-bin/modprobe \
+            /tmp/sunshine-install-bin/udevadm \
+        && PATH="/tmp/sunshine-install-bin:${PATH}" \
+            apt-get install -y --no-install-recommends /tmp/sunshine.deb \
+        && test "$(dpkg-query -W -f='${Version}' sunshine)" = "${SUNSHINE_VERSION}" \
+        && install -Dm0755 /usr/bin/sunshine /opt/sunshine-native/sunshine \
+        && setcap cap_sys_admin,cap_sys_nice+p /opt/sunshine-native/sunshine \
+        && getcap /opt/sunshine-native/sunshine | grep -Fq 'cap_sys_admin,cap_sys_nice=p' \
         && test -f \
             /usr/share/icons/hicolor/scalable/apps/dev.lizardbyte.app.Sunshine.svg \
         && test -f \

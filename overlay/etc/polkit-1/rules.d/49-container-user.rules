@@ -1,0 +1,9 @@
+// The default container user already has passwordless sudo access. Mirror that
+// trust model for desktop applications so Flatpak, GNOME Software, and account
+// integration can complete privileged operations without an unavailable login
+// agent or interactive root password prompt.
+polkit.addRule(function(action, subject) {
+    if (subject.user == "default" || subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});

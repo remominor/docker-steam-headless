@@ -35,11 +35,9 @@ All files that are store outside your home directory are not persistent and will
 ### GAMES LIBRARY:
 It is recommended that you mount your games library to `/mnt/games` and configure Steam to add that path.
 
-### JC141:
-JC141 games run directly on the container's virtual Xorg desktop. Gamescope is
-not installed by default because Debian Bookworm's Gamescope 3.11.49 did not
-produce a usable nested window in this headless NVIDIA/Xorg configuration.
-Without the Gamescope executable, JC141 launchers automatically use direct X11.
+### Gamescope:
+Gamescope is not installed by default because Debian Bookworm's Gamescope 3.11.49
+did not produce a usable nested window in this headless NVIDIA/Xorg configuration.
 
 ### AUTO START APPLICATIONS:
 In this container, Steam is configured to automatically start. If you wish to add additional services to automatically start, 

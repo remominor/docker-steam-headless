@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 LABEL maintainer="Josh.5 <jsunnex@gmail.com>"
 
 # Update package repos
@@ -130,10 +130,10 @@ RUN \
 RUN \
     echo "**** Installing WineHQ ****" \
     && apt-get update \
-    && apt-get install -y --no-install-recommends software-properties-common gnupg wget \
+    && apt-get install -y --no-install-recommends gnupg wget \
     && mkdir -p /etc/apt/keyrings \
     && wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
-    && wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources \
+    && wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/trixie/winehq-trixie.sources \
     && apt-get update \
     && apt-get install -y --install-recommends winehq-staging winetricks \
     && \
@@ -222,7 +222,7 @@ RUN \
             libxcomposite-dev \
             libxcursor1 \
             wmctrl \
-            libfuse2 \
+            libfuse2t64 \
             x11-utils \
             x11-xfs-utils \
             x11-xkb-utils \
@@ -233,7 +233,6 @@ RUN \
             xclip \
             xcvt \
             xdotool \
-            xfishtank \
             xfonts-base \
             xinit \
             xinput \
@@ -267,9 +266,9 @@ RUN \
         && apt-get install -y --no-install-recommends \
             pulseaudio \
             alsa-utils \
-            libasound2 \
+            libasound2t64 \
             libasound2-plugins \
-            libasound2:i386 \
+            libasound2t64:i386 \
             libasound2-plugins:i386 \
             libpulse0:i386 \
     && \
@@ -293,8 +292,8 @@ RUN \
         && apt-get install -y --no-install-recommends \
             libdbus-1-3 \
             libegl1 \
-            libgtk-3-0 \
-            libgtk2.0-0 \
+            libgtk-3-0t64 \
+            libgtk2.0-0t64 \
             libsdl2-2.0-0 \
     && \
     echo "**** Install desktop environment ****" \
@@ -303,7 +302,7 @@ RUN \
             fonts-vlgothic \
             gedit \
             imagemagick \
-            msttcorefonts \
+            ttf-mscorefonts-installer \
             xdg-utils \
             xfce4 \
             xfce4-terminal \
@@ -467,7 +466,7 @@ RUN \
             gstreamer1.0-vaapi \
             gstreamer1.0-x \
             libgstreamer1.0-0 \
-            libncursesw5 \
+            libncursesw6 \
             libopenal1 \
             libsdl-image1.2 \
             libsdl-ttf2.0-0 \
@@ -564,9 +563,8 @@ RUN \
     && \
     echo
 
-# Sunshine no longer publishes a Debian Bookworm package. Install the official
-# self-contained AppImage instead of mixing a Debian Trixie package into this
-# Bookworm image. Extract it at build time so runtime does not require another
+# Install the pinned official Sunshine AppImage instead of following a mutable
+# distro package. Extract it at build time so runtime does not require another
 # FUSE mount.
 ARG SUNSHINE_VERSION=2026.516.143833
 ARG SUNSHINE_APPIMAGE_SHA256=d0ee0a9cfb66f27869b559455f84622d21615047ccf3443c9a2f572ca971c7a2

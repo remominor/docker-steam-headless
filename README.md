@@ -17,7 +17,7 @@ Easily deploy a Steam Docker instance in seconds.
 - Full controller support
 - Support for Flatpak and Appimage installation
 - Root access
-- Based on Debian Bookworm
+- Based on Debian Trixie
 
 ---
 ## Notes:
@@ -35,9 +35,17 @@ All files that are store outside your home directory are not persistent and will
 ### GAMES LIBRARY:
 It is recommended that you mount your games library to `/mnt/games` and configure Steam to add that path.
 
-### Gamescope:
-Gamescope is not installed by default because Debian Bookworm's Gamescope 3.11.49
-did not produce a usable nested window in this headless NVIDIA/Xorg configuration.
+### UPGRADING FROM BOOKWORM:
+Existing appdata can be reused when upgrading to the Trixie image. During
+upgrade testing, Steam initially reopened its UI when the window was closed.
+Fully exiting and relaunching Steam once cleared the stale session state, and
+the fix persisted across container restarts. Try this before resetting existing
+appdata if the same behavior occurs.
+
+### GAMESCOPE:
+Gamescope is not installed by default. Debian Trixie currently publishes it
+through backports rather than the base repository, and nested operation in this
+headless NVIDIA/Xorg configuration has not yet been revalidated.
 
 ### AUTO START APPLICATIONS:
 In this container, Steam is configured to automatically start. If you wish to add additional services to automatically start, 
@@ -80,6 +88,12 @@ For a development environment, I have created a script in the devops directory.
 ## TODO:
 - Remove SSH
 - Require user to enter password for sudo
+- Evaluate replacing the pinned Sunshine AppImage with the pinned native
+  `sunshine-debian-trixie-amd64.deb`. Verify container-safe package installation,
+  udev/capability setup, the shared launcher, NVENC, Moonlight input, tray
+  behavior, and final image size.
+- Install Gamescope from Trixie backports and test nested operation with the
+  headless NVIDIA/Xorg configuration before enabling it by default.
 - Document how to run this container:
     - Other server OS
     - TrueNAS Scale 

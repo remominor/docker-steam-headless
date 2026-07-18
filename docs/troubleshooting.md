@@ -14,7 +14,9 @@ Reinstall an application persistently with:
 flatpak --user install flathub <application-id>
 ```
 
-Flatpak's bubblewrap sandbox also needs permission to mount a private `/proc` inside the container. Docker Compose deployments should include `systempaths:unconfined` under `security_opt`. For Unraid, add `--security-opt='systempaths=unconfined'` to the container's Extra Parameters and recreate the container. Without it, applications fail with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted` followed by `ldconfig failed, exit status 256`. On NVIDIA systems, the container startup scripts also remove the runtime-injected `/proc/driver/nvidia/params` submount because any separate mount below `/proc` blocks the same nested sandbox operation.
+Flatpak's bubblewrap sandbox also needs to mount a private `/proc` inside the container. At startup, Steam Headless mounts a clean procfs over the container's existing `/proc`. This covers Docker's masked and read-only procfs submounts together with runtime additions such as `/proc/driver/nvidia/params`, allowing the nested sandbox to start without `systempaths=unconfined`. Keep the documented `SYS_ADMIN` capability in the container configuration; it is required for this procfs remount.
+
+If an application fails with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted` followed by `ldconfig failed, exit status 256`, check the container startup log for `Could not mount a clean procfs`. Verify that `SYS_ADMIN` and `seccomp:unconfined` are still configured, then recreate the container. The older `systempaths=unconfined` workaround is no longer required and can be removed from Unraid Extra Parameters or Docker Compose.
 
 Sometimes Flatpak runtimes can become inconsistent between major Steam Headless updates. In that case:
 

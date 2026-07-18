@@ -98,20 +98,16 @@ in `sunshine.conf` are preserved.
 
 ## FLATPAK APPLICATIONS:
 
-Add the following value to the container's **Extra Parameters** and recreate
-the container:
-
-```text
---security-opt='systempaths=unconfined'
-```
-
 Flatpak applications run a nested bubblewrap sandbox that mounts its own
-`/proc`. Without this Docker security option, applications install but fail to
-launch with `ldconfig failed, exit status 256`. On NVIDIA systems, container
-startup also removes the runtime-injected `/proc/driver/nvidia/params` submount
-that otherwise blocks the nested sandbox. Applications installed from the
-desktop Software application use the persistent `default` user installation
-under `/home/default/.local/share/flatpak`.
+`/proc`. Container startup mounts a clean, container-local procfs so Docker's
+masked paths and NVIDIA runtime submounts do not block that sandbox. No
+additional `systempaths=unconfined` security option is required. The container
+must retain the supplied `SYS_ADMIN` capability so it can perform the procfs
+remount.
+
+Applications installed from the desktop Software application use the
+persistent `default` user installation under
+`/home/default/.local/share/flatpak`.
 
 
 ## REMOTE INPUT AND CONTROLLER SUPPORT:

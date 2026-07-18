@@ -2,17 +2,16 @@
 print_header "Configure Flatpak"
 
 if command -v flatpak >/dev/null 2>&1; then
-    # The NVIDIA container runtime bind-mounts a small tmpfs over this procfs
-    # file. Any submount below /proc prevents an unprivileged user namespace
-    # from mounting the fresh procfs required by Flatpak's bubblewrap sandbox.
-    # The driver and device nodes do not depend on keeping this parameters file
-    # mounted after the runtime has initialized the container.
-    nvidia_params_mount="/proc/driver/nvidia/params"
-    if findmnt -rn -o TARGET | grep -Fxq "${nvidia_params_mount}"; then
-        print_step_header "Removing NVIDIA procfs shim that blocks nested Flatpak sandboxes"
-        if ! umount "${nvidia_params_mount}"; then
-            print_warning "Could not unmount '${nvidia_params_mount}'; Flatpak applications may fail to launch"
-        fi
+    # Docker masks and makes several paths below /proc read-only. The NVIDIA
+    # runtime can add another submount at /proc/driver/nvidia/params. Any of
+    # these nested mounts prevents Flatpak's unprivileged bubblewrap process
+    # from mounting the private procfs used by its PID namespace. Cover the
+    # runtime-provided tree with a clean procfs in this container's mount
+    # namespace, retaining the standard safe procfs mount options. This is the
+    # same basic workaround used by upstream, with explicit failure handling.
+    print_step_header "Mounting a clean procfs for nested Flatpak sandboxes"
+    if ! mount -t proc -o nosuid,nodev,noexec proc /proc; then
+        print_warning "Could not mount a clean procfs; Flatpak applications may fail to launch"
     fi
 
     mkdir -p "${USER_HOME:?}/.local/share/flatpak"

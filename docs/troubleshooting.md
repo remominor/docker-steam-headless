@@ -1,6 +1,22 @@
 ## Flatpaks not working
 
-Steam runs with Flatpak. These Flatpaks are instlled into the `default` user's home directory so they persist between container updates. Sometimes Flatpaks can get into a knot between major Steam Headless updates. In such cases, it may not work correctly. To fix this, just delete the Flatpak runtime in your `default` user's home directory a restart the container.
+Flatpaks are installed into the `default` user's home directory so they persist between container updates. Apps installed from the Software application should appear under `<SteamHeadless Home>/.local/share/flatpak`. A Flatpak shown as a `system` installation instead lives in the disposable container layer and should be reinstalled for the user.
+
+Check the installation scope with:
+
+```shell
+flatpak list --app --columns=application,installation,branch
+```
+
+Reinstall an application persistently with:
+
+```shell
+flatpak --user install flathub <application-id>
+```
+
+Flatpak's bubblewrap sandbox also needs permission to mount a private `/proc` inside the container. Docker Compose deployments should include `systempaths:unconfined` under `security_opt`. For Unraid, add `--security-opt='systempaths=unconfined'` to the container's Extra Parameters and recreate the container. Without it, applications fail with `bwrap: Can't mount proc on /newroot/proc: Operation not permitted` followed by `ldconfig failed, exit status 256`. On NVIDIA systems, the container startup scripts also remove the runtime-injected `/proc/driver/nvidia/params` submount because any separate mount below `/proc` blocks the same nested sandbox operation.
+
+Sometimes Flatpak runtimes can become inconsistent between major Steam Headless updates. In that case:
 
 1) Stop the container.
 2) Delete the directory `<SteamHeadless Home>/.local/share/flatpak`

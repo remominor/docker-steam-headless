@@ -27,7 +27,7 @@ Easily deploy a Steam Docker instance in seconds.
 If you wish to install additional applications, you can generate a script inside the `~/init.d` directory ending with ".sh".
 This will be executed on the container startup.
 
-Also, you can install applications using the WebUI under **Applications > System > Software**. There you can install other game launchers like Lutris, Heroic or EmuDeck.
+Also, you can install applications using the WebUI under **Applications > System > Software**. There you can install other game launchers like Lutris, Heroic or EmuDeck. Flatpak applications are installed for the `default` user under `/home/default/.local/share/flatpak`, so they persist in the mounted appdata directory.
 
 ### STORAGE PATHS:
 Everything that you wish to save in this container should be stored in the home directory or a docker container mount that you have specified. 

@@ -96,6 +96,24 @@ in `sunshine.conf` are preserved.
 2. Profit
 
 
+## FLATPAK APPLICATIONS:
+
+Add the following value to the container's **Extra Parameters** and recreate
+the container:
+
+```text
+--security-opt='systempaths=unconfined'
+```
+
+Flatpak applications run a nested bubblewrap sandbox that mounts its own
+`/proc`. Without this Docker security option, applications install but fail to
+launch with `ldconfig failed, exit status 256`. On NVIDIA systems, container
+startup also removes the runtime-injected `/proc/driver/nvidia/params` submount
+that otherwise blocks the nested sandbox. Applications installed from the
+desktop Software application use the persistent `default` user installation
+under `/home/default/.local/share/flatpak`.
+
+
 ## REMOTE INPUT AND CONTROLLER SUPPORT:
 
 Unraid's Linux kernel by default does not have the modules required to support controller input. Steam requires these modules to be able to create the virtual "Steam Input Gamepad Emulation" device that it can then map buttons to.

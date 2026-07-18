@@ -371,8 +371,7 @@ RUN \
             flatpak \
             gnome-software-plugin-flatpak \
     && \
-    echo "**** Configure Flatpak ****" \
-        && flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo \
+    echo "**** Configure Flatpak sandbox helper ****" \
         && dpkg-statoverride --update --add root root 0755 /usr/bin/bwrap \
     && \
     echo "**** Section cleanup ****" \

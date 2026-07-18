@@ -18,6 +18,8 @@ services:
     security_opt:
       - seccomp:unconfined
       - apparmor:unconfined
+      # Allow Flatpak's nested bubblewrap sandbox to mount its own /proc.
+      - systempaths:unconfined
 
     # GPU PASSTHROUGH
     runtime: nvidia
